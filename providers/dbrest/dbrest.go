@@ -14,7 +14,8 @@ import (
 	"traines.eu/time-space-train-planner/providers/dbrest/models"
 )
 
-const results = 1000
+// TODO some stations, e.g. Hamburg Hbf, yield more than 1000 results within 4 hours. Maybe filter out local transport (buses, trams etc.) in request if no vias station is specified that is nearby (reasonably reachable by local transport)?
+const results = 3000
 
 type DbRest struct {
 	consumer       providers.Consumer
@@ -26,8 +27,8 @@ func (p *DbRest) Fetch(c providers.Consumer) {
 	p.consumer = c
 	p.prepareClient()
 	//p.requestStations()
-	p.requestDeparturesAndArrivals()
 	p.requestJourneys()
+	p.requestDeparturesAndArrivals()
 }
 
 func (p *DbRest) Enrich(c providers.Consumer) {
@@ -65,7 +66,8 @@ func (p *DbRest) requestStation(station providers.ProviderStation) {
 func (p *DbRest) requestDeparturesAndArrivals() {
 	stations := p.consumer.Stations()
 	for i, station := range stations {
-		if i > 10 {
+		if i > 20 {
+			log.Print("Aborting station retrieval, maximum station count exceeded.")
 			break
 		}
 		from, to := p.consumer.RequestStationDataBetween(&station)
@@ -98,6 +100,13 @@ func (p *DbRest) requestDeparture(station providers.ProviderStation, when time.T
 	r := int64(results)
 	params.Results = &r
 	params.When = (*strfmt.DateTime)(&when)
+	if station.NoLocalTransport {
+		f := false
+		params.Bus = &f
+		params.Subway = &f
+		params.Tram = &f
+		params.Taxi = &f
+	}
 
 	res, err := p.client.Operations.GetStopsIDDepartures(params)
 	if err != nil {
@@ -182,7 +191,17 @@ func (p *DbRest) parseLineStop(stop *models.DepartureArrival, arrival bool, evaN
 			current.DepartureTrack = *stop.Platform
 		}
 	}
-	p.consumer.UpsertLineStop(providers.ProviderLineStop{EvaNumber: evaNumber, LineID: tripID, Planned: planned, Current: current})
+	pls := providers.ProviderLineStop{EvaNumber: evaNumber, LineID: tripID, Planned: planned, Current: current}
+	if len(stop.Remarks) > 0 {
+		for _, remark := range stop.Remarks {
+			if pls.Message != "" {
+				pls.Message += ", " + remark.Text
+			} else {
+				pls.Message = remark.Text
+			}
+		}
+	}
+	p.consumer.UpsertLineStop(pls)
 }
 
 func (p *DbRest) requestJourneys() {
@@ -212,6 +231,7 @@ func (p *DbRest) requestJourneysApi() {
 }
 
 func (p *DbRest) parseStationsFromJourneys() {
+	var start, end time.Time
 	for _, journey := range p.cachedJourneys.Journeys {
 		for _, leg := range journey.Legs {
 			evaNumberFrom, err1 := strconv.Atoi(*leg.Origin.ID)
@@ -229,11 +249,19 @@ func (p *DbRest) parseStationsFromJourneys() {
 					Lat:       float32(*leg.Destination.Location.Latitude),
 					Lon:       float32(*leg.Destination.Location.Longitude),
 				})
+				if leg.Departure != nil && start.IsZero() {
+					start = time.Time(*leg.Departure)
+				}
+				if leg.Arrival != nil {
+					end = time.Time(*leg.Arrival)
+				}
 			} else {
 				log.Print("Error while trying to read stations from journeys")
 			}
 		}
 	}
+	log.Print("expdur", start, end)
+	p.consumer.SetExpectedTravelDuration(end.Sub(start))
 }
 
 func (p *DbRest) parseEdgesFromJourneys() {
@@ -246,20 +274,20 @@ func (p *DbRest) parseEdgesFromJourneys() {
 				continue
 			}
 			hafas := true
+			planned := &providers.ProviderLineStopInfo{}
 			p.consumer.UpsertLineEdge(providers.ProviderLineEdge{
 				EvaNumberFrom:        evaNumberFrom,
 				EvaNumberTo:          evaNumberTo,
 				LineID:               *leg.TripID,
 				ProviderShortestPath: &hafas,
-				Planned: &providers.ProviderLineStopInfo{
-					Departure: time.Time(*leg.Departure),
-					Arrival:   time.Time(*leg.Arrival),
-					//					DepartureTrack: *leg.DeparturePlatform,
-					//					ArrivalTrack:   *leg.ArrivalPlatform,
-				},
+				Planned:              planned,
 			})
-
+			if leg.Departure != nil {
+				planned.Departure = time.Time(*leg.Departure)
+			}
+			if leg.Arrival != nil {
+				planned.Arrival = time.Time(*leg.Arrival)
+			}
 		}
-		//break
 	}
 }

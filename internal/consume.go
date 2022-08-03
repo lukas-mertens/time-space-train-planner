@@ -11,24 +11,35 @@ import (
 )
 
 type consumer struct {
-	providers        []providers.Provider
-	providerStations []providers.ProviderStation
-	stations         map[int]*Station
-	lines            map[string]*Line
-	dateTime         time.Time
+	providers              []providers.Provider
+	providerStations       []providers.ProviderStation
+	stations               map[int]*Station
+	lines                  map[string]*Line
+	dateTime               time.Time
+	expectedTravelDuration time.Duration
 }
 
 var loc, _ = time.LoadLocation("Europe/Berlin")
 
 func (c *consumer) RequestStationDataBetween(station *providers.ProviderStation) (from time.Time, to time.Time) {
-	delta, _ := time.ParseDuration("4h")
+	// TODO increase depending on journey time according to HAFAS, otherwise longer journeys are impossible to plan
+	defaultDuration, _ := time.ParseDuration("2h")
+	maxDuration, _ := time.ParseDuration("10h")
 
-	log.Print("Requesting for ", c.dateTime)
+	var travelDuration time.Duration
+	if c.expectedTravelDuration < defaultDuration {
+		travelDuration = defaultDuration
+	} else if c.expectedTravelDuration > maxDuration {
+		travelDuration = maxDuration
+	} else {
+		travelDuration = c.expectedTravelDuration.Round(time.Hour)
+	}
+	log.Print("Requesting for ", station.EvaNumber, " at ", c.dateTime, " with duration +2 ", travelDuration)
 	//t := time.Now()
 	//from = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.Local)
 	//from = time.Date(t.Year(), t.Month(), 9, 19, 0, 0, 0, time.Local)
 	from = c.dateTime
-	return from, from.Add(delta)
+	return from, from.Add(travelDuration).Add(defaultDuration)
 }
 
 func (c *consumer) Stations() []providers.ProviderStation {
@@ -109,8 +120,8 @@ func (c *consumer) UpsertLine(e providers.ProviderLine) {
 
 func existingStopHasDifferentPlanned(e providers.ProviderLineStop, stop *LineStop) bool {
 	return e.Planned != nil &&
-		(!e.Planned.Arrival.IsZero() && e.Planned.Arrival != stop.Planned.Arrival ||
-			!e.Planned.Departure.IsZero() && e.Planned.Departure != stop.Planned.Departure)
+		(!e.Planned.Arrival.IsZero() && !stop.Planned.Arrival.IsZero() && e.Planned.Arrival != stop.Planned.Arrival ||
+			!e.Planned.Departure.IsZero() && !stop.Planned.Departure.IsZero() && e.Planned.Departure != stop.Planned.Departure)
 }
 
 func (c *consumer) UpsertLineStop(e providers.ProviderLineStop) {
@@ -126,7 +137,7 @@ func (c *consumer) UpsertLineStop(e providers.ProviderLineStop) {
 	}
 	var val *LineStop
 	for _, stop := range line.Stops {
-		if stop.Station == station {
+		if stop.Station == station && !existingStopHasDifferentPlanned(e, stop) {
 			val = stop
 			break
 		}
@@ -153,6 +164,7 @@ func (c *consumer) UpsertLineEdge(e providers.ProviderLineEdge) {
 	foundStart := false
 	foundEnd := false
 	for _, edge := range line.Route {
+		// TODO handle multi-line trains (ICE / RE, IC / NJ etc, e.g. IC 60400/NJ 40470)
 		if edge.From.EvaNumber == e.EvaNumberFrom || foundStart && !foundEnd {
 			if e.ProviderShortestPath != nil {
 				edge.ProviderShortestPath = *e.ProviderShortestPath
@@ -165,28 +177,11 @@ func (c *consumer) UpsertLineEdge(e providers.ProviderLineEdge) {
 	}
 	if !foundEnd {
 		log.Printf("Provider found connection that was not found by TSTP (From: %d, To: %d, LineID: %s)", e.EvaNumberFrom, e.EvaNumberTo, e.LineID)
-		from, ok1 := c.stations[e.EvaNumberFrom]
-		to, ok2 := c.stations[e.EvaNumberTo]
-		if !ok1 || !ok2 {
-			log.Panicf("Non-existant Station for stop of Line %s", e.LineID)
-			return
-		}
-		edge := &Edge{
-			Line: line,
-			From: from,
-			To:   to,
-			Actual: StopInfo{
-				Departure:      e.Planned.Departure,
-				Arrival:        e.Planned.Arrival,
-				DepartureTrack: e.Planned.DepartureTrack,
-				ArrivalTrack:   e.Planned.ArrivalTrack,
-			},
-			ProviderShortestPath: *e.ProviderShortestPath,
-		}
-		line.Route = append(line.Route, edge)
-		edge.From.Departures = append(edge.From.Departures, edge)
-		edge.To.Arrivals = append(edge.To.Arrivals, edge)
 	}
+}
+
+func (c *consumer) SetExpectedTravelDuration(duration time.Duration) {
+	c.expectedTravelDuration = duration
 }
 
 func copyProviderStopInfo(from *providers.ProviderLineStopInfo, to *StopInfo) {
@@ -242,6 +237,7 @@ func indexOf(slice []int, value int) int {
 }
 
 func (c *consumer) rankStations(origin *Station, destination *Station) {
+	//force := []int{8070003, 8070004, 8000105, 8098105, 8006404, 8000615}
 	force := []int{}
 	var stationsSlice []*Station
 	for _, s := range c.stations {
@@ -262,7 +258,15 @@ func (c *consumer) rankStations(origin *Station, destination *Station) {
 		if forceI != -1 && forceJ != -1 {
 			return forceI < forceJ
 		}
-		return geoDistStations(origin, stationsSlice[i])-geoDistStations(destination, stationsSlice[i]) < geoDistStations(origin, stationsSlice[j])-geoDistStations(destination, stationsSlice[j])
+		stationI := stationsSlice[i]
+		if stationI.GroupNumber != nil {
+			stationI = c.stations[*stationI.GroupNumber]
+		}
+		stationJ := stationsSlice[j]
+		if stationJ.GroupNumber != nil {
+			stationJ = c.stations[*stationJ.GroupNumber]
+		}
+		return geoDistStations(origin, stationI)-geoDistStations(destination, stationI) < geoDistStations(origin, stationJ)-geoDistStations(destination, stationJ)
 	})
 	i := 0
 	for _, s := range stationsSlice {
@@ -274,6 +278,9 @@ func (c *consumer) rankStations(origin *Station, destination *Station) {
 func copyStopInfo(lastFrom *StopInfo, thisFrom *StopInfo, to *StopInfo) {
 	if lastFrom.DepartureTrack != "" {
 		to.DepartureTrack = lastFrom.DepartureTrack
+	}
+	if thisFrom.ArrivalTrack != "" {
+		to.ArrivalTrack = thisFrom.ArrivalTrack
 	}
 	if !lastFrom.Departure.IsZero() {
 		to.Departure = lastFrom.Departure
@@ -293,10 +300,11 @@ func ObtainData(from int, to int, vias []int, dateTime string) (map[int]*Station
 	evaNumbers = append(evaNumbers, vias...)
 	evaNumbers = append(evaNumbers, to)
 
+	log.Print(evaNumbers)
 	c.initializeProviders(evaNumbers)
 	c.callProviders(false)
 	c.generateEdges(c.stations[from], c.stations[to])
-	shortestPaths(c.stations, c.stations[to])
+	shortestPaths(c.stations, c.stations[from], c.stations[to])
 	c.callProviders(true)
 	c.rankStations(c.stations[from], c.stations[to])
 	return c.stations, c.lines
@@ -307,7 +315,9 @@ func (c *consumer) parseDate(dateTime string) {
 	t, err := time.ParseInLocation(layout, dateTime, loc)
 
 	if err != nil {
-		log.Panic(err)
+		t := time.Now()
+		c.dateTime = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.Local)
+	} else {
+		c.dateTime = t
 	}
-	c.dateTime = t
 }

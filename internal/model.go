@@ -3,14 +3,14 @@ package internal
 import "time"
 
 type Station struct {
-	Name       string
-	EvaNumber  int
-	Departures []*Edge
-	Arrivals   []*Edge
-	Lat        float32
-	Lon        float32
-	Rank       int
-	GroupNumber      *int
+	Name        string
+	EvaNumber   int
+	Departures  []*Edge
+	Arrivals    []*Edge
+	Lat         float32
+	Lon         float32
+	Rank        int
+	GroupNumber *int
 }
 
 type Edge struct {
@@ -22,8 +22,11 @@ type Edge struct {
 	Actual               StopInfo
 	Message              string
 	ShortestPath         *Edge
+	ReverseShortestPath  *Edge
 	ProviderShortestPath bool
+	ShortestPathFor      map[*Edge]struct{}
 	Redundant            bool
+	Discarded            bool
 }
 
 type StopInfo struct {

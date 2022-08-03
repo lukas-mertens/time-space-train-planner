@@ -16,15 +16,17 @@ type Consumer interface {
 	UpsertLine(line ProviderLine)
 	UpsertLineStop(lineStop ProviderLineStop)
 	UpsertLineEdge(lineEdge ProviderLineEdge)
+	SetExpectedTravelDuration(duration time.Duration)
 }
 
 type ProviderStation struct {
-	EvaNumber   int
-	Code100     string
-	GroupNumber *int
-	Name        string
-	Lat         float32
-	Lon         float32
+	EvaNumber        int
+	Code100          string
+	GroupNumber      *int
+	Name             string
+	Lat              float32
+	Lon              float32
+	NoLocalTransport bool
 }
 
 type ProviderLineStop struct {
