@@ -15,10 +15,19 @@ svg {
 .edge-toucharea {
     stroke-width: 20px;
     stroke: transparent;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .redundant-true {
     stroke: #dbdbdb;
+    marker-start: url(#dot-redundant-true);
+    marker-end: url(#dot-redundant-true);
+}
+
+.redundant-false {
+    marker-start: url(#dot-redundant-false);
+    marker-end: url(#dot-redundant-false);
 }
 
 #dot-redundant-true circle {
@@ -42,6 +51,26 @@ svg {
 
 .arrival, .departure {
     font-weight: bold;
+}
+
+.arrival {
+    text-anchor: end;
+}
+
+.departure {
+    text-anchor: start;
+}
+
+.label {
+    text-anchor: middle;
+}
+
+.live-red {
+    fill: #B71C1C;
+}
+
+.live-green {
+    fill: #019B92;
 }
 
 .arrival.selected, .departure.selected, .label.selected {
@@ -80,3 +109,23 @@ svg {
     stroke-width: 1px;
 }
 
+.previous-next-arrow {
+    opacity: 0.5;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    cursor: pointer;
+    font-size: 200%;
+}
+
+.button {
+    fill: #dbdbdb;
+    rx: 5;
+    ry: 5;
+}
+
+.ui-link {
+    dominant-baseline: middle;
+    text-anchor: middle;
+    font-weight: bold;
+    fill: #01579B;
+}
